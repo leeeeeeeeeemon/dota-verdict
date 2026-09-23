@@ -81,6 +81,8 @@ main { width: min(1060px, 94vw); margin: 0 auto; flex: 1; }
 .banner.radiant h2 { color: var(--radiant); }
 .banner.dire h2 { color: var(--dire); }
 .banner .meta { color: var(--muted); font-size: 13px; }
+.banner-actions { margin-top: 14px; }
+.btn.sm { padding: 9px 16px; font-size: 13px; }
 
 /* ---------- Карточки вердикта ---------- */
 

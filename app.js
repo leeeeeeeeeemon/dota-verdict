@@ -98,16 +98,17 @@
   const itemImg = (key) =>
     'https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react/items/' + key + '.png';
 
-  // Если страница открыта с локального сервера — у него есть прокси /opendota/api.
-  // Прямой доступ к api.opendota.com иногда блокируется (встроенные браузеры, прокси, брандмауэры),
-  // поэтому при проблемах автоматически переключаемся на локальный прокси.
-  const PROXY_BASE =
-    /^https?:$/.test(location.protocol) && ['127.0.0.1', 'localhost'].indexOf(location.hostname) !== -1
-      ? location.origin + '/opendota/api'
-      : null;
-  let proxyOk = null; // null — не проверяли
+  // Кандидаты прокси: свой путь (страница открыта с локального сервера) и фиксированный порт
+  // на этой же машине. https-страницы могут ходить на http://127.0.0.1 (loopback-исключение),
+  // поэтому даже живой сайт на GitHub Pages пользуется локальным кэширующим сервером, если он запущен.
+  const PROXY_CANDIDATES = [];
+  if (/^https?:$/.test(location.protocol) && ['127.0.0.1', 'localhost'].indexOf(location.hostname) !== -1) {
+    PROXY_CANDIDATES.push(location.origin + '/opendota/api');
+  }
+  PROXY_CANDIDATES.push('http://127.0.0.1:8765/opendota/api');
+  let proxyBase = null;
+  let proxyProbed = false;
 
-  const proxify = (url) => url.replace('https://api.opendota.com/api', PROXY_BASE);
   const isNetErr = (e) => !e || e.name === 'AbortError' || e instanceof TypeError;
 
   async function tryFetchJSON(url, timeoutMs, opts) {
@@ -122,23 +123,27 @@
     }
   }
 
+  async function findProxy() {
+    if (proxyProbed) return proxyBase;
+    proxyProbed = true;
+    for (const base of PROXY_CANDIDATES) {
+      try {
+        await tryFetchJSON(base + '/heroes', 2500);
+        proxyBase = base;
+        break;
+      } catch (e) { /* пробуем следующий кандидат */ }
+    }
+    return proxyBase;
+  }
+
   async function fetchJSON(url, timeoutMs, opts) {
     timeoutMs = timeoutMs || 20000;
-    if (PROXY_BASE) {
-      if (proxyOk === null) {
-        try {
-          await tryFetchJSON(PROXY_BASE + '/heroes', 3000);
-          proxyOk = true;
-        } catch (e) {
-          proxyOk = false;
-        }
-      }
-      if (proxyOk) {
-        try {
-          return await tryFetchJSON(proxify(url), timeoutMs, opts);
-        } catch (e) {
-          if (!isNetErr(e)) throw e; // ошибки API (404, 429...) честно показываем
-        }
+    const base = await findProxy();
+    if (base) {
+      try {
+        return await tryFetchJSON(url.replace('https://api.opendota.com/api', base), timeoutMs, opts);
+      } catch (e) {
+        if (!isNetErr(e)) throw e; // ошибки API (404, 429...) честно показываем
       }
     }
     try {
@@ -146,6 +151,9 @@
     } catch (e) {
       if (e && e.name === 'AbortError') {
         throw new Error('OpenDota не ответил за ' + Math.round(timeoutMs / 1000) + ' с — попробуй ещё раз');
+      }
+      if (e instanceof TypeError) {
+        throw new Error('Браузер не смог достучаться до OpenDota (встроенный просмотрщик или блокировщик?). Открой сайт в обычном Chrome/Edge — или запусти start.bat и обнови страницу.');
       }
       throw e;
     }
@@ -266,6 +274,8 @@
     drawChart(match, v);
     const parseBtn = document.getElementById('parseBtn');
     if (parseBtn) parseBtn.addEventListener('click', () => requestParse(match.match_id));
+    const shareBtn = document.getElementById('shareBtn');
+    if (shareBtn) shareBtn.addEventListener('click', () => shareVerdict(match, v, heroes));
   }
 
   function bannerHTML(match, v) {
@@ -278,6 +288,7 @@
       ' : <span class="d">' + (match.dire_score ?? v.teams.dire.kills) + ' Dire</span></div>' +
       '<h2>' + winnerName + ' одерживает победу' + (match.radiant_name && match.dire_name ? ' — ' + (v.winner === 'radiant' ? esc(match.radiant_name) : esc(match.dire_name)) : '') + '</h2>' +
       '<div class="meta">' + mode + ' · ' + DotaVerdict.fmtDur(v.duration) + ' · ' + date + ' · матч ' + match.match_id + '</div>' +
+      '<div class="banner-actions"><button id="shareBtn" class="btn primary sm">📤 Поделиться картинкой</button></div>' +
       '</section>'
     );
   }
@@ -658,6 +669,268 @@
       box.innerHTML =
         '<article class="card dossier"><div class="card-title">📁 Досье игрока</div>' +
         '<div class="dossier-loading">Не удалось собрать досье: ' + esc(e.message) + '</div></article>';
+    }
+  }
+
+  // ---------- Шеринг картинкой ----------
+
+  const LIVE_URL = 'https://leeeeeeeeeemon.github.io/dota-verdict/';
+
+  // Steam-CDN отдаёт CORS только для dota2.com, поэтому портреты для canvas
+  // грузим через wsrv.nl (добавляет Access-Control-Allow-Origin: *), с запасным плашечным фолбэком
+  const shareImgUrl = (url, w) => 'https://wsrv.nl/?url=' + encodeURIComponent(url) + '&w=' + w + '&output=png';
+
+  function loadImg(src) {
+    return new Promise((res) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      let done = false;
+      const finish = (val) => {
+        if (done) return;
+        done = true;
+        res(val);
+      };
+      const timer = setTimeout(() => finish(null), 5000); // медленный/молчащий CDN не должен вешать генерацию
+      img.onload = () => {
+        clearTimeout(timer);
+        finish(img);
+      };
+      img.onerror = () => {
+        clearTimeout(timer);
+        finish(null);
+      };
+      img.src = src;
+    });
+  }
+
+  function rr(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function ellipsize(ctx, text, maxW) {
+    if (ctx.measureText(text).width <= maxW) return text;
+    let t = text;
+    while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+    return t + '…';
+  }
+
+  function drawPortrait(ctx, img, x, y, w, h, fallbackText) {
+    rr(ctx, x, y, w, h, 8);
+    ctx.save();
+    ctx.clip();
+    if (img && img.width) {
+      ctx.drawImage(img, x, y, w, h);
+    } else {
+      ctx.fillStyle = '#0d1117';
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = '#8a93a3';
+      ctx.font = '600 ' + Math.round(h * 0.38) + 'px "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(fallbackText, x + w / 2, y + h / 2 + 2);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+    }
+    ctx.restore();
+    rr(ctx, x, y, w, h, 8);
+    ctx.strokeStyle = '#26303d';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  async function generateShareImage(match, v, heroes) {
+    const W = 1200, H = 630;
+    const c = document.createElement('canvas');
+    c.width = W;
+    c.height = H;
+    const ctx = c.getContext('2d');
+    const F = (weight, size) => weight + ' ' + size + 'px "Segoe UI", system-ui, sans-serif';
+    const heroName = (id) => (heroes[id] || {}).localized_name || 'Герой #' + id;
+    const initials = (s) => s.split(/\s+/).map((x) => x[0] || '').join('').slice(0, 2).toUpperCase();
+
+    ctx.fillStyle = '#10141a';
+    ctx.fillRect(0, 0, W, H);
+    let g = ctx.createRadialGradient(120, 0, 0, 120, 0, 720);
+    g.addColorStop(0, 'rgba(212,165,69,.15)');
+    g.addColorStop(1, 'rgba(212,165,69,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    g = ctx.createRadialGradient(1200, 630, 0, 1200, 630, 720);
+    g.addColorStop(0, 'rgba(224,93,79,.13)');
+    g.addColorStop(1, 'rgba(224,93,79,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    rr(ctx, 14, 14, W - 28, H - 28, 26);
+    ctx.strokeStyle = 'rgba(212,165,69,.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = '#d4a545';
+    ctx.font = F('700', 42);
+    ctx.fillText('⚖️ КТО ЗАРУНИЛ?', 48, 84);
+    const rScore = match.radiant_score != null ? match.radiant_score : v.teams.radiant.kills;
+    const dScore = match.dire_score != null ? match.dire_score : v.teams.dire.kills;
+    ctx.font = F('600', 28);
+    const scoreParts = [['Radiant ' + rScore, '#7ec850'], [' : ', '#8a93a3'], [dScore + ' Dire', '#e05d4f']];
+    let tx = W - 48 - scoreParts.reduce((a, p) => a + ctx.measureText(p[0]).width, 0);
+    for (const [text, color] of scoreParts) {
+      ctx.fillStyle = color;
+      ctx.fillText(text, tx, 84);
+      tx += ctx.measureText(text).width;
+    }
+    const mode = MODES[match.game_mode] || 'Режим ' + match.game_mode;
+    ctx.fillStyle = '#8a93a3';
+    ctx.font = F('400', 19);
+    ctx.fillText(mode + ' · ' + DotaVerdict.fmtDur(v.duration) + ' · матч ' + match.match_id, 48, 118);
+
+    const need = [v.ruiner, v.mvpWinner, v.bestSupport].filter(Boolean);
+    const imgs = await Promise.all(
+      need.map((pl) => {
+        const h = heroes[pl.heroId];
+        return h && h.name ? loadImg(shareImgUrl(HERO_IMG(h), 256)) : Promise.resolve(null);
+      })
+    );
+    const imgOf = new Map(need.map((pl, i) => [pl, imgs[i]]));
+
+    // левая карточка — виновник
+    const lx = 48, ly = 148, lw = 610, lh = 356;
+    rr(ctx, lx, ly, lw, lh, 20);
+    ctx.fillStyle = 'rgba(224,93,79,.07)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(224,93,79,.55)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = '#e05d4f';
+    ctx.font = F('700', 20);
+    ctx.fillText('🔨 ВИНОВНИК ПРОИГРЫША', lx + 26, ly + 40);
+    if (v.collective) {
+      ctx.fillStyle = '#cfc9ba';
+      ctx.font = F('600', 34);
+      ctx.fillText('Коллективная вина', lx + 26, ly + 140);
+      ctx.fillStyle = '#8a93a3';
+      ctx.font = F('400', 20);
+      ctx.fillText('Яркого руинера нет — катку слила вся команда.', lx + 26, ly + 184);
+      ctx.fillText('Дружно. Организованно. Без лишних.', lx + 26, ly + 214);
+    } else {
+      drawPortrait(ctx, imgOf.get(v.ruiner), lx + 26, ly + 64, 128, 72, initials(heroName(v.ruiner.heroId)));
+      ctx.fillStyle = '#e8e3d5';
+      ctx.font = F('700', 32);
+      ctx.fillText(ellipsize(ctx, heroName(v.ruiner.heroId), 300), lx + 174, ly + 102);
+      ctx.fillStyle = '#8a93a3';
+      ctx.font = F('400', 19);
+      ctx.fillText(ellipsize(ctx, v.ruiner.nick, 300), lx + 174, ly + 128);
+      const barW = lw - 52;
+      rr(ctx, lx + 26, ly + 162, barW, 14, 7);
+      ctx.fillStyle = '#0d1117';
+      ctx.fill();
+      rr(ctx, lx + 26, ly + 162, Math.max(24, (barW * v.ruiner.ruin.score) / 100), 14, 7);
+      ctx.fillStyle = '#e05d4f';
+      ctx.fill();
+      ctx.font = F('700', 20);
+      ctx.fillText('СТЕПЕНЬ ВИНЫ ' + v.ruiner.ruin.score + '%', lx + 26, ly + 206);
+      ctx.font = F('400', 18);
+      ctx.fillStyle = '#cfc9ba';
+      v.ruiner.ruin.comps.slice(0, 3).forEach((comp, i) => {
+        ctx.fillText('• ' + ellipsize(ctx, comp.text, barW - 24), lx + 26, ly + 244 + i * 32);
+      });
+    }
+
+    // правые мини-карточки — MVP и лучший саппорт
+    const rx = 686, rw = 466, rh = 170;
+    const minis = [
+      { pl: v.mvpWinner, color: '#d4a545', title: '🏆 MVP КАТКИ', bg: 'rgba(212,165,69,.07)' },
+      v.bestSupport ? { pl: v.bestSupport, color: '#4fc3c9', title: '🧤 ЛУЧШИЙ САППОРТ', bg: 'rgba(79,195,201,.07)' } : null,
+    ].filter(Boolean);
+    minis.forEach((mcard, i) => {
+      const my = ly + i * (rh + 16);
+      rr(ctx, rx, my, rw, rh, 20);
+      ctx.fillStyle = mcard.bg;
+      ctx.fill();
+      ctx.strokeStyle = mcard.color;
+      ctx.globalAlpha = 0.55;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = mcard.color;
+      ctx.font = F('700', 18);
+      ctx.fillText(mcard.title, rx + 24, my + 36);
+      drawPortrait(ctx, imgOf.get(mcard.pl), rx + 24, my + 56, 96, 54, initials(heroName(mcard.pl.heroId)));
+      ctx.fillStyle = '#e8e3d5';
+      ctx.font = F('700', 26);
+      ctx.fillText(ellipsize(ctx, heroName(mcard.pl.heroId), 190), rx + 136, my + 86);
+      ctx.fillStyle = '#8a93a3';
+      ctx.font = F('400', 17);
+      ctx.fillText(ellipsize(ctx, mcard.pl.nick, 190), rx + 136, my + 110);
+      ctx.font = F('400', 14);
+      ctx.fillText(mcard.pl.kills + '/' + mcard.pl.deaths + '/' + mcard.pl.assists + ' · ' + mcard.pl.gpm + ' GPM', rx + 136, my + 134);
+      ctx.font = F('700', 40);
+      ctx.textAlign = 'right';
+      ctx.fillText(mcard.pl.mvp + '%', rx + rw - 24, my + 106);
+      ctx.font = F('400', 15);
+      ctx.fillStyle = '#8a93a3';
+      ctx.fillText('вклад', rx + rw - 24, my + 130);
+      ctx.textAlign = 'left';
+    });
+
+    ctx.strokeStyle = '#26303d';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(48, 560);
+    ctx.lineTo(1152, 560);
+    ctx.stroke();
+    ctx.fillStyle = '#d4a545';
+    ctx.font = F('600', 20);
+    ctx.fillText('leeeeeeeeeemon.github.io/dota-verdict?match=' + match.match_id, 48, 598);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#8a93a3';
+    ctx.font = F('400', 16);
+    ctx.fillText('Вердикт вынесен алгоритмом · это шутка · данные OpenDota', 1152, 598);
+    ctx.textAlign = 'left';
+
+    return c;
+  }
+
+  async function shareVerdict(match, v, heroes) {
+    const btn = document.getElementById('shareBtn');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '⚖️ Рисуем приговор...';
+    }
+    try {
+      const canvas = await generateShareImage(match, v, heroes);
+      const blob = await new Promise((res, rej) => {
+        try {
+          canvas.toBlob((b) => (b ? res(b) : rej(new Error('PNG не собрался'))), 'image/png');
+        } catch (e) {
+          rej(e);
+        }
+      });
+      const file = new File([blob], 'verdict-' + match.match_id + '.png', { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'КТО ЗАРУНИЛ?', text: 'Вердикт по матчу ' + match.match_id });
+      } else {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = file.name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return; // пользователь закрыл шаринг — не ошибка
+      showStatus('Не удалось собрать картинку: ' + e.message, 'error');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '📤 Поделиться картинкой';
+      }
     }
   }
 
