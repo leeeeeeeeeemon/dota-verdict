@@ -108,6 +108,7 @@
   PROXY_CANDIDATES.push('http://127.0.0.1:8765/opendota/api');
   let proxyBase = null;
   let proxyProbePromise = null;
+  let proxyKnown = false; // true, когда проверка прокси завершилась (base найден или нет)
 
   const isNetErr = (e) => !e || e.name === 'AbortError' || e instanceof TypeError;
 
@@ -123,8 +124,6 @@
     }
   }
 
-  // Кэшируем промис, а не результат: параллельные вызовы ждут одну и ту же проверку,
-  // иначе часть запросов уходит напрямую до окончания пробы (и виснет без внешней сети).
   function findProxy() {
     if (!proxyProbePromise) {
       proxyProbePromise = (async () => {
@@ -136,31 +135,56 @@
         }
         return null;
       })();
+      proxyProbePromise.then(() => { proxyKnown = true; });
       proxyProbePromise.then((b) => { proxyBase = b; });
     }
     return proxyProbePromise;
   }
 
+  const NET_HINT = 'Если это встроенный просмотрщик — открой сайт в обычном браузере (Chrome/Edge) или запусти start.bat и обнови страницу.';
+
   async function fetchJSON(url, timeoutMs, opts) {
     timeoutMs = timeoutMs || 20000;
-    const base = await findProxy();
-    if (base) {
+
+    // быстрый путь: прокси уже известен (кэширует и экономит лимиты OpenDota)
+    if (proxyKnown && proxyBase) {
       try {
-        return await tryFetchJSON(url.replace('https://api.opendota.com/api', base), timeoutMs, opts);
+        return await tryFetchJSON(url.replace('https://api.opendota.com/api', proxyBase), timeoutMs, opts);
       } catch (e) {
         if (!isNetErr(e)) throw e; // ошибки API (404, 429...) честно показываем
       }
     }
+
+    const direct = () => tryFetchJSON(url, timeoutMs, opts);
+
+    if (proxyKnown && !proxyBase) {
+      // прокси искали и не нашли — обычный браузер без локального сервера: только прямые запросы
+      try {
+        return await direct();
+      } catch (e) {
+        if (e && e.name === 'AbortError') throw new Error('OpenDota не ответил вовремя. ' + NET_HINT);
+        throw e;
+      }
+    }
+
+    // прокси ещё не проверен: гонка, первый успешный путь побеждает.
+    // Обычный браузер без сервера не ждёт пробу (connection refused мгновенный),
+    // а среда без внешней сети получает данные через локальный сервер, не дожидаясь таймаута прямого пути.
+    const noProxy = new Error('no-proxy');
+    noProxy.noProxy = true;
+    const viaProxy = (async () => {
+      const base = await findProxy();
+      if (!base) throw noProxy;
+      return tryFetchJSON(url.replace('https://api.opendota.com/api', base), timeoutMs, opts);
+    })();
+
     try {
-      return await tryFetchJSON(url, timeoutMs, opts);
-    } catch (e) {
-      if (e && e.name === 'AbortError') {
-        throw new Error('OpenDota не ответил вовремя. Если это встроенный просмотрщик — открой сайт в обычном браузере (Chrome/Edge) или запусти start.bat и обнови страницу.');
-      }
-      if (e instanceof TypeError) {
-        throw new Error('Браузер не смог достучаться до OpenDota (встроенный просмотрщик или блокировщик?). Открой сайт в обычном Chrome/Edge — или запусти start.bat и обнови страницу.');
-      }
-      throw e;
+      return await Promise.any([direct(), viaProxy]);
+    } catch (agg) {
+      const errs = agg && Array.isArray(agg.errors) ? agg.errors : [agg];
+      const apiErr = errs.find((e) => e && !isNetErr(e) && !e.noProxy);
+      if (apiErr) throw apiErr; // настоящий ответ API (404, 429...) важнее сетевых ошибок
+      throw new Error('Браузер не смог достучаться до OpenDota. ' + NET_HINT);
     }
   }
 
