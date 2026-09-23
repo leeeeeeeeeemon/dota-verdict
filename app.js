@@ -107,7 +107,7 @@
   }
   PROXY_CANDIDATES.push('http://127.0.0.1:8765/opendota/api');
   let proxyBase = null;
-  let proxyProbed = false;
+  let proxyProbePromise = null;
 
   const isNetErr = (e) => !e || e.name === 'AbortError' || e instanceof TypeError;
 
@@ -123,17 +123,22 @@
     }
   }
 
-  async function findProxy() {
-    if (proxyProbed) return proxyBase;
-    proxyProbed = true;
-    for (const base of PROXY_CANDIDATES) {
-      try {
-        await tryFetchJSON(base + '/heroes', 2500);
-        proxyBase = base;
-        break;
-      } catch (e) { /* пробуем следующий кандидат */ }
+  // Кэшируем промис, а не результат: параллельные вызовы ждут одну и ту же проверку,
+  // иначе часть запросов уходит напрямую до окончания пробы (и виснет без внешней сети).
+  function findProxy() {
+    if (!proxyProbePromise) {
+      proxyProbePromise = (async () => {
+        for (const base of PROXY_CANDIDATES) {
+          try {
+            await tryFetchJSON(base + '/heroes', 4000);
+            return base;
+          } catch (e) { /* пробуем следующий кандидат */ }
+        }
+        return null;
+      })();
+      proxyProbePromise.then((b) => { proxyBase = b; });
     }
-    return proxyBase;
+    return proxyProbePromise;
   }
 
   async function fetchJSON(url, timeoutMs, opts) {
@@ -150,7 +155,7 @@
       return await tryFetchJSON(url, timeoutMs, opts);
     } catch (e) {
       if (e && e.name === 'AbortError') {
-        throw new Error('OpenDota не ответил за ' + Math.round(timeoutMs / 1000) + ' с — попробуй ещё раз');
+        throw new Error('OpenDota не ответил вовремя. Если это встроенный просмотрщик — открой сайт в обычном браузере (Chrome/Edge) или запусти start.bat и обнови страницу.');
       }
       if (e instanceof TypeError) {
         throw new Error('Браузер не смог достучаться до OpenDota (встроенный просмотрщик или блокировщик?). Открой сайт в обычном Chrome/Edge — или запусти start.bat и обнови страницу.');
