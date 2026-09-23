@@ -10,7 +10,10 @@
   const sum = (arr, f) => arr.reduce((acc, x) => acc + (f(x) || 0), 0);
   const pct = (x) => Math.round(x * 100) + '%';
 
-  const ROLES = { 1: 'Керри', 2: 'Мид', 3: 'Оффлейн', 4: 'Фарм-джунгли' };
+  // Позиции для подписи в таблице: мид определяется лайном, керри — лучший фарм среди не-мидов,
+  // саппорты — нижние две позиции по GPM. lane_role у OpenDota — это ЛАЙН (1 изи, 2 мид, 3 хард),
+  // поэтому «оба саппорта на изи-лейне» нельзя подписывать по лайну как «Керри».
+  const POS_LABELS = { 4: 'Саппорт', 5: 'Фулл-саппорт' };
 
   // Предметы, по которым смотрим тайминги (и которые поздно покупать после 30-й минуты)
   const LATE_ITEMS = [
@@ -125,6 +128,21 @@
     const rankBySlot = new Map(byGpm.map((p, i) => [p.player_slot, n - i]));
 
     t.players = rawPlayers.map((p) => decorate(p, t, duration, hasWardData, hasStackData, supportSlots.has(p.player_slot), rankBySlot.get(p.player_slot) || 3));
+
+    // Позиционные подписи: мид — по лайну, керри — лучший фарм среди не-мидов,
+    // саппорты — нижние две позиции по GPM
+    const mids = t.players.filter((p) => p.raw.lane_role === 2);
+    const rest = t.players.filter((p) => p.raw.lane_role !== 2).sort((a, b) => b.gpm - a.gpm);
+    mids.forEach((p) => { p.laneRole = 'Мид'; });
+    if (rest[0]) rest[0].laneRole = 'Керри';
+    rest.slice(1).forEach((p) => {
+      p.laneRole = p.farmRank >= 4
+        ? POS_LABELS[p.farmRank]
+        : p.farmRank === 3 || p.raw.lane_role === 3 ? 'Оффлейн'
+        : p.farmRank === 2 ? 'Мид' // без данных о лайнах вторая позиция по фарму — почти всегда мид
+        : 'Кор';
+    });
+
     for (const pl of t.players) {
       pl.ruin = ruinOf(pl, t, duration, hasWardData);
       const m = mvpParts(pl, t, hasWardData);
@@ -161,8 +179,7 @@
       wards,
       stacks: hasStackData ? p.camps_stacked || 0 : null,
       leaver: (p.leaver_status || 0) >= 2,
-      isSupport,
-      laneRole: ROLES[p.lane_role] || (isSupport ? 'Саппорт' : 'Кор'),
+      laneRole: 'Кор',
       teamKills: t.kills,
       kda: p.deaths ? (p.kills + p.assists) / p.deaths : (p.kills + p.assists),
       participation: t.kills > 0 ? (p.kills + p.assists) / t.kills : 0,
