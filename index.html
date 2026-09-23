@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Пост-матч судья каток Dota 2: введи ID матча — узнай, кто заруинил катку, кто настоящий MVP и кто лучший саппорт.">
+  <title>КТО ЗАРУНИЛ? — суд над каткой</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚖️</text></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="hero">
+    <h1>⚖️ КТО ЗАРУНИЛ?</h1>
+    <p class="tagline">Пост-матч судебная экспертиза катки. Вводи ID матча — суд изучит улики и вынесет вердикт: кто заруинил, кто тащил, а кто просто фармил.</p>
+  </header>
+
+  <main>
+    <section class="search">
+      <input id="matchInput" type="text" placeholder="ID матча, например 8123456789 (можно вставить ссылку)" autocomplete="off" spellcheck="false">
+      <button id="goBtn" class="btn primary">ВЫНЕСТИ ВЕРДИКТ</button>
+      <button id="randomBtn" class="btn ghost" title="Взять случайную свежую про-катку">🎲 Случайная про-катка</button>
+    </section>
+    <p class="hint">Где взять ID: открой матч на opendota.com или stratz.com — номер в адресной строке. Или жми «случайную про-катку».</p>
+
+    <div id="status" class="status hidden"></div>
+    <div id="result" class="hidden"></div>
+  </main>
+
+  <footer>
+    Данные: <a href="https://www.opendota.com" target="_blank" rel="noopener">OpenDota API</a> · Вердикты выносит алгоритм, а не истина в последней инстанции.
+    Это шутка — не идите флэймить тиммейтов. С любовью к Доте ❤️
+  </footer>
+
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
