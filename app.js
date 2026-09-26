@@ -1038,6 +1038,100 @@
 
   // ---------- Инициализация ----------
 
+  // ---------- Разбор игрока ----------
+
+  function parseAccountId(raw) {
+    const digits = (String(raw || '').match(/\d+/g) || []).join('');
+    if (!digits || digits.length < 6) return null;
+    if (digits.length >= 17) {
+      // Steam64 → account_id (число больше MAX_SAFE_INTEGER, поэтому BigInt)
+      try {
+        return Number(BigInt(digits) - 76561197960265728n);
+      } catch (e) {
+        return null;
+      }
+    }
+    return Number(digits);
+  }
+
+  async function openPlayerReview(rawInput) {
+    const id = parseAccountId(rawInput);
+    if (!id) {
+      showStatus('Это не похоже на Steam ID. Вставь ID из ссылки своего профиля на opendota.com/stratz.com.', 'error');
+      return;
+    }
+    showStatus('📋 Собираем материалы на игрока...');
+    try {
+      const [prof, wl, recent, heroAgg, heroes] = await Promise.all([
+        fetchJSON(API + '/players/' + id).catch(() => null),
+        fetchJSON(API + '/players/' + id + '/wl').catch(() => null),
+        fetchJSON(API + '/players/' + id + '/recentMatches').catch(() => null),
+        fetchJSON(API + '/players/' + id + '/heroes').catch(() => null),
+        loadHeroes(),
+      ]);
+      const r = DotaVerdict.analyzePlayer({
+        recent: Array.isArray(recent) ? recent : [],
+        heroes: Array.isArray(heroAgg) ? heroAgg : [],
+        heroesMap: heroes,
+      });
+      if (!r) {
+        showStatus('У этого аккаунта не нашлось сыгранных каток (или профиль скрыт).', 'error');
+        return;
+      }
+      renderReview(prof, wl, r, heroes, id);
+      showStatus('');
+      $('#status').classList.add('hidden');
+      history.replaceState(null, '', '?player=' + id);
+    } catch (e) {
+      showStatus('Разбор не получился: ' + e.message, 'error');
+    }
+  }
+
+  function renderReview(prof, wl, r, heroes, id) {
+    const profile = (prof && prof.profile) || {};
+    const rank = rankName(prof && prof.rank_tier);
+    const mmr = prof && prof.mmr_estimate && prof.mmr_estimate.estimate ? ' · ~' + prof.mmr_estimate.estimate + ' MMR' : '';
+    const bestHero = r.bestHero && heroes[r.bestHero.hero_id]
+      ? heroes[r.bestHero.hero_id].localized_name
+      : null;
+
+    const chips = [
+      '<span class="chip">Последние <b>' + r.games + '</b> каток</span>',
+      '<span class="chip">Винрейт <b>' + r.wins + '/' + r.games + '</b> (' + Math.round(r.winrate * 100) + '%)</span>',
+      '<span class="chip">KDA <b>' + r.kda + '</b></span>',
+      '<span class="chip"><b>' + r.deaths + '</b> смертей/катку</span>',
+      '<span class="chip"><b>' + r.gpm + '</b> GPM</span>',
+      '<span class="chip"><b>' + r.lh10 + '</b> ластхитов к 10 мин</span>',
+      '<span class="chip">Катка ~<b>' + r.avgDur + '</b> мин</span>',
+    ];
+    if (wl && wl.win) chips.push('<span class="chip">Всего <b>' + fmtNum(wl.win) + 'W</b> / ' + fmtNum(wl.lose) + 'L</span>');
+
+    const advice = r.advice
+      .map((a) =>
+        '<div class="advice"><span class="advice-icon">' + a.icon + '</span>' +
+        '<div><b>' + esc(a.title) + '</b><p>' + esc(a.text) + '</p></div></div>')
+      .join('');
+
+    const box = $('#playerResult');
+    box.innerHTML =
+      '<article class="card review">' +
+      '<div class="card-title">📋 Разбор игрока: что чинить, чтобы побеждать</div>' +
+      '<div class="dossier-head">' +
+      (profile.avatarfull ? '<img class="avatar" src="' + esc(profile.avatarfull) + '" alt="">' : '') +
+      '<div class="dossier-id"><h3>' + esc(profile.personaname || 'Игрок ' + id) + '</h3>' +
+      '<span class="nick">' + (rank ? rank : 'ранг скрыт') + mmr + ' · данные OpenDota</span></div>' +
+      '<button class="dossier-close" title="Закрыть разбор">✕</button>' +
+      '</div>' +
+      '<div class="chips">' + chips.join('') + '</div>' +
+      (bestHero ? '<p class="review-best">Лучший герой: <b>' + esc(bestHero) + '</b> — ' + Math.round((100 * r.bestHero.win) / r.bestHero.games) + '% побед за ' + r.bestHero.games + ' игр.</p>' : '') +
+      '<p class="quote">«' + esc(r.verdict) + '»</p>' +
+      '<div class="advice-list">' + advice + '</div>' +
+      '</article>';
+    box.classList.remove('hidden');
+    box.querySelector('.dossier-close').addEventListener('click', () => box.classList.add('hidden'));
+    box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     $('#goBtn').addEventListener('click', run);
     $('#randomBtn').addEventListener('click', randomPro);
@@ -1050,10 +1144,20 @@
       const heroes = await loadHeroes();
       openDossier(Number(tr.dataset.account), heroes);
     });
+    $('#playerBtn').addEventListener('click', () => openPlayerReview($('#playerInput').value));
+    $('#playerInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') openPlayerReview($('#playerInput').value);
+    });
     const fromUrl = new URLSearchParams(location.search).get('match');
     if (fromUrl && /^\d{4,}$/.test(fromUrl)) {
       $('#matchInput').value = fromUrl;
       run();
+    } else {
+      const playerFromUrl = new URLSearchParams(location.search).get('player');
+      if (playerFromUrl && /^\d{4,}$/.test(playerFromUrl)) {
+        $('#playerInput').value = playerFromUrl;
+        openPlayerReview(playerFromUrl);
+      }
     }
   });
 })();

@@ -44,6 +44,8 @@ main { width: min(1060px, 94vw); margin: 0 auto; flex: 1; }
 .tagline { color: var(--muted); max-width: 640px; margin: 12px auto 0; line-height: 1.5; }
 
 .search { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 22px; }
+.player-search { margin-top: 10px; }
+.player-search input { max-width: 460px; font-size: 14px; padding: 10px 14px; }
 .search input {
   flex: 1 1 320px;
   max-width: 460px;
@@ -198,6 +200,17 @@ main { width: min(1060px, 94vw); margin: 0 auto; flex: 1; }
 .st-guilty { color: var(--dire); font-weight: 700; }
 .st-mvp { color: var(--gold); font-weight: 700; }
 .st-best { color: var(--radiant); font-weight: 700; }
+
+/* ---------- Разбор игрока ---------- */
+
+.review { border-color: rgba(126, 200, 80, 0.4); }
+.review .card-title { color: var(--radiant); }
+.review-best { margin: 12px 0 0; color: #cfc9ba; font-size: 14px; }
+.advice-list { margin-top: 16px; display: grid; gap: 12px; }
+.advice { display: flex; gap: 14px; align-items: flex-start; background: #0d1117; border: 1px solid var(--card-edge); border-radius: 12px; padding: 12px 14px; }
+.advice-icon { font-size: 24px; line-height: 1.2; flex: none; }
+.advice b { font-size: 14.5px; }
+.advice p { margin: 4px 0 0; color: #b7bcc8; font-size: 13.5px; line-height: 1.55; }
 
 .notice { padding: 14px 18px; border-radius: 12px; background: var(--bg-soft); border: 1px solid var(--card-edge); color: var(--muted); font-size: 14px; margin-bottom: 18px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: space-between; }
 .notice .btn { padding: 8px 14px; font-size: 13px; }

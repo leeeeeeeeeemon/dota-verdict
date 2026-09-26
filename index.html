@@ -20,9 +20,14 @@
       <button id="goBtn" class="btn primary">ВЫНЕСТИ ВЕРДИКТ</button>
       <button id="randomBtn" class="btn ghost" title="Взять случайную свежую про-катку">🎲 Случайная про-катка</button>
     </section>
-    <p class="hint">Где взять ID: открой матч на opendota.com или stratz.com — номер в адресной строке. Или жми «случайную про-катку».</p>
+    <section class="search player-search">
+      <input id="playerInput" type="text" placeholder="Твой Steam ID / ссылка на профиль OpenDota — разбор и советы" autocomplete="off" spellcheck="false">
+      <button id="playerBtn" class="btn ghost">📋 Разбор игрока</button>
+    </section>
+    <p class="hint">Где взять ID: открой матч на opendota.com или stratz.com — номер в адресной строке. Или жми «случайную про-катку». Steam ID найдёшь в адресе своего профиля OpenDota/Stratz.</p>
 
     <div id="status" class="status hidden"></div>
+    <div id="playerResult" class="hidden"></div>
     <div id="result" class="hidden"></div>
   </main>
 

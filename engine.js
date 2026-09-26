@@ -13,7 +13,7 @@
   // Позиции для подписи в таблице: мид определяется лайном, керри — лучший фарм среди не-мидов,
   // саппорты — нижние две позиции по GPM. lane_role у OpenDota — это ЛАЙН (1 изи, 2 мид, 3 хард),
   // поэтому «оба саппорта на изи-лейне» нельзя подписывать по лайну как «Керри».
-  const POS_LABELS = { 4: 'Саппорт', 5: 'Фулл-саппорт' };
+  const POS_LABELS = { 4: 'Саппорт (4)', 5: 'Фулл-саппорт (5)' };
 
   // Предметы, по которым смотрим тайминги (и которые поздно покупать после 30-й минуты)
   const LATE_ITEMS = [
@@ -121,9 +121,16 @@
     };
     t.wards = hasWardData ? sum(rawPlayers, (p) => (p.obs_placed || 0) + (p.sen_placed || 0)) : null;
 
-    // Саппорты = нижняя половина команды по GPM (works даже без lane_role из парсинга)
+    // Саппорты = нижняя половина команды по GPM, но мид (lane_role 2) саппортом не бывает —
+    // иначе подпись «Мид» конфликтует с подсчётом его как саппорта в скоринге
     const byGpm = [...rawPlayers].sort((a, b) => (a.gold_per_min || 0) - (b.gold_per_min || 0));
-    const supportSlots = new Set(byGpm.slice(0, Math.max(1, Math.floor(n / 2))).map((p) => p.player_slot));
+    const wanted = Math.max(1, Math.floor(n / 2));
+    const supportSlots = new Set();
+    for (const p of byGpm) {
+      if (supportSlots.size >= wanted) break;
+      if (p.lane_role === 2) continue;
+      supportSlots.add(p.player_slot);
+    }
     // ранг фарма: 1 = самый богатый по GPM
     const rankBySlot = new Map(byGpm.map((p, i) => [p.player_slot, n - i]));
 
@@ -133,13 +140,13 @@
     // саппорты — нижние две позиции по GPM
     const mids = t.players.filter((p) => p.raw.lane_role === 2);
     const rest = t.players.filter((p) => p.raw.lane_role !== 2).sort((a, b) => b.gpm - a.gpm);
-    mids.forEach((p) => { p.laneRole = 'Мид'; });
-    if (rest[0]) rest[0].laneRole = 'Керри';
+    mids.forEach((p) => { p.laneRole = 'Мид (2)'; });
+    if (rest[0]) rest[0].laneRole = 'Керри (1)';
     rest.slice(1).forEach((p) => {
       p.laneRole = p.farmRank >= 4
         ? POS_LABELS[p.farmRank]
-        : p.farmRank === 3 || p.raw.lane_role === 3 ? 'Оффлейн'
-        : p.farmRank === 2 ? 'Мид' // без данных о лайнах вторая позиция по фарму — почти всегда мид
+        : p.farmRank === 3 || p.raw.lane_role === 3 ? 'Оффлейн (3)'
+        : p.farmRank === 2 ? 'Мид (2)' // без данных о лайнах вторая позиция по фарму — почти всегда мид
         : 'Кор';
     });
 
@@ -293,7 +300,8 @@
       // без парса реплея вардов нет — не наказываем саппорта слепо, даём нейтральные 5/10
       vision = { key: 'wards_na', label: 'Варды (нет данных)', val: 0.5, target: 1, max: 10, disp: 'нейтрально' };
     } else {
-      vision = { key: 'xpm', label: 'Опыт относительно команды', val: pl.xpmRatio, target: 1.2, max: 10, disp: Math.round(pl.xpmRatio * 100) + '%' };
+      const delta = Math.round((pl.xpmRatio - 1) * 100);
+      vision = { key: 'xpm', label: 'Опыт против среднего команды', val: pl.xpmRatio, target: 1.2, max: 10, disp: (delta >= 0 ? '+' : '') + delta + '% к среднему' };
     }
     const defs = [
       { key: 'part', label: 'Участие в убийствах', val: pl.participation, target: 0.65, max: 34, disp: pct(pl.participation) },
@@ -427,7 +435,92 @@
     });
   }
 
-  const api = { analyze, fmtDur, plural, pct, itemLabel };
+  // ---------- Разбор игрока: статистика последних каток + советы ----------
+  // На вход: { recent: последние матчи OpenDota, heroes: агрегат по героям, heroesMap: id → герой }
+
+  function analyzePlayer(input) {
+    const recent = (input.recent || []).filter((m) => m && m.duration > 900).slice(0, 20);
+    if (!recent.length) return null;
+    const heroName = (id) =>
+      (input.heroesMap && input.heroesMap[id] && input.heroesMap[id].localized_name) || 'герой #' + id;
+    const isWin = (m) => (m.player_slot < 128) === !!m.radiant_win;
+    const games = recent.length;
+    const wins = recent.filter(isWin).length;
+    const avg = (f) => recent.reduce((a, m) => a + (f(m) || 0), 0) / games;
+    const round1 = (x) => Math.round(x * 10) / 10;
+
+    const kills = avg((m) => m.kills);
+    const deaths = avg((m) => m.deaths);
+    const assists = avg((m) => m.assists);
+    const gpm = avg((m) => m.gold_per_min);
+    const lh10 = avg((m) => ((m.last_hits || 0) * 600) / m.duration);
+    const avgDur = avg((m) => m.duration);
+
+    const solo = recent.filter((m) => m.party_size === 1);
+    const party = recent.filter((m) => (m.party_size || 1) > 1);
+    const wr = (arr) => (arr.length >= 3 ? arr.filter(isWin).length / arr.length : null);
+    const soloWr = wr(solo);
+    const partyWr = wr(party);
+
+    let streak = 0; // текущая серия поражений (свежие матчи в начале)
+    for (const m of recent) {
+      if (!isWin(m)) streak++;
+      else break;
+    }
+
+    const pool = (input.heroes || []).filter((h) => h.games >= 5).sort((a, b) => b.games - a.games).slice(0, 15);
+    let bestHero = null;
+    for (const h of pool) {
+      if (!bestHero || h.win / h.games > bestHero.win / bestHero.games) bestHero = h;
+    }
+
+    const advice = [];
+    if (streak >= 3) {
+      advice.push({ icon: '🧊', title: 'Сделай паузу', text: 'Последние ' + streak + ' каток — поражения. Тильт — не миф: после серии лоссов винрейт падает у всех. Выйди из очереди, попей воды, вернись завтра.' });
+    }
+    if (deaths >= 8) {
+      advice.push({ icon: '💀', title: 'Меньше умирать', text: 'В среднем ' + round1(deaths) + ' смертей за катку. Каждая смерть — золото и опыт врагу. Перед тем как заходить на героя, посмотри на миникарту: телепорт врага там уже нарисован.' });
+    } else if (deaths >= 6.5) {
+      advice.push({ icon: '💀', title: 'Держи смерти ниже шести', text: round1(deaths) + ' смертей в среднем — на грани. Хороший ориентир для любого ранга: не больше 6 за катку.' });
+    }
+    if (lh10 < 38 && gpm < 500) {
+      advice.push({ icon: '🌾', title: 'Прокачай фарм', text: '~' + Math.round(lh10) + ' ластхитов к 10-й минуте и ' + Math.round(gpm) + ' GPM. Десять минут фарма в демо-режиме перед сессией дают больше, чем три катки на автомате.' });
+    }
+    if (bestHero && bestHero.win / bestHero.games >= 0.55) {
+      advice.push({ icon: '🎯', title: 'Играй на своём', text: heroName(bestHero.hero_id) + ': ' + Math.round((100 * bestHero.win) / bestHero.games) + '% побед за ' + bestHero.games + ' игр — твой лучший герой. Пикай его чаще, модные мета-спеки подождут.' });
+    }
+    if (soloWr !== null && partyWr !== null && Math.abs(soloWr - partyWr) >= 0.15) {
+      advice.push(soloWr > partyWr
+        ? { icon: '🧍', title: 'Соло — твой формат', text: 'В одиночку ' + pct(soloWr) + ' побед, со стаком ' + pct(partyWr) + '. Парадокс, но статистика именно такая.' }
+        : { icon: '🤝', title: 'Найди стак', text: 'Со стаком ' + pct(partyWr) + ' побед, в соло ' + pct(soloWr) + '. Разница в ' + Math.round(Math.abs(soloWr - partyWr) * 100) + ' п.п. — это не случайность.' });
+    }
+    if (avgDur > 45 * 60 && wins / games < 0.45) {
+      advice.push({ icon: '⏱', title: 'Заканчивай раньше', text: 'Катки длятся в среднем ' + Math.round(avgDur / 60) + ' минут, а побед меньше половины. Поздняя игра — лотерея: решай, пока преимущество ещё на твоей стороне.' });
+    }
+    if (!advice.length) {
+      advice.push({ icon: '📈', title: 'Держи курс', text: 'Явных провалов в статистике нет — побеждать мешают мелочи. Посмотри реплеи своих смертей без обзора: обычно эти проценты винрейта и лежат там.' });
+    }
+
+    const winrate = wins / games;
+    const verdict = winrate >= 0.55
+      ? 'Форма отменная. Суд фиксирует: можно смело поднимать MMR.'
+      : winrate >= 0.45
+      ? 'Стабильный середняк. Решают мелочи — они перечислены ниже.'
+      : winrate >= 0.35
+      ? 'Винрейт ниже воды. Начни с одного пункта из списка — не со всех сразу.'
+      : 'Комиссия рекомендует: тренировочный режим, вода, сон. И один пункт из списка.';
+
+    return {
+      games, wins, losses: games - wins, winrate,
+      kills: round1(kills), deaths: round1(deaths), assists: round1(assists),
+      kda: round1(deaths ? (kills + assists) / deaths : kills + assists),
+      gpm: Math.round(gpm), lh10: Math.round(lh10),
+      avgDur: Math.round(avgDur / 60),
+      soloWr, partyWr, streak, bestHero, advice, verdict,
+    };
+  }
+
+  const api = { analyze, fmtDur, plural, pct, itemLabel, analyzePlayer };
   root.DotaVerdict = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
